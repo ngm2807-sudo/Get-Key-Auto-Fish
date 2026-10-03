@@ -12,9 +12,9 @@ function randomSegment(length) {
   return out;
 }
 
-/** Sinh key dạng XXXXX-XXXXX-XXXXX (A-Z a-z 0-9). */
+/** Sinh key dạng XXXXX-XXXXX-XXXXX-XXXXX-XXXXX (A-Z a-z 0-9). */
 function generateLicenseKey() {
-  return `${randomSegment(5)}-${randomSegment(5)}-${randomSegment(5)}`;
+  return Array.from({ length: 5 }, () => randomSegment(5)).join('-');
 }
 
 /** Sinh token theo dõi phiên checkpoint (dùng làm puid/click_id và path /claim/:token). */
