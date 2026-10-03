@@ -321,10 +321,12 @@ app.get('/webhook/lootlabs', async (req, res) => {
  * kiểu này chỉ cần StrSplit 2 lần, không cần cài thêm gì ở phía client.
  *
  * reason có thể là: ok | missing_params | not_found | revoked | expired |
- *                    hwid_mismatch | hwid_blacklisted
+ *                    hwid_mismatch | hwid_blacklisted | hwid_limit_reached
  *
- * Lần đầu 1 key được verify (hwid hiện đang null), server tự BIND hwid gửi
- * lên vào key đó luôn — đây chính là lúc "khoá" key vào máy.
+ * Mỗi key có hwidLimit máy được phép dùng cùng lúc (mặc định 1). Khi 1 HWID
+ * mới gửi lên và key chưa đủ slot (hwids.length < hwidLimit), server tự
+ * BIND hwid đó vào key luôn. Khi đã đủ slot và hwid gửi lên không nằm
+ * trong danh sách đã bind → hwid_limit_reached.
  */
 app.get('/api/validate', async (req, res) => {
   res.type('text/plain');
@@ -350,12 +352,14 @@ app.get('/api/validate', async (req, res) => {
     return res.send('valid=false\nreason=expired');
   }
 
-  if (!doc.hwid) {
-    // Lần verify đầu tiên — bind luôn hwid này vào key.
-    doc.hwid = hwid;
+  if (!doc.hwids.includes(hwid)) {
+    const limit = doc.hwidLimit || 1;
+    if (doc.hwids.length >= limit) {
+      return res.send('valid=false\nreason=hwid_limit_reached');
+    }
+    // Còn slot trống — bind luôn hwid này vào key.
+    doc.hwids.push(hwid);
     await doc.save();
-  } else if (doc.hwid !== hwid) {
-    return res.send('valid=false\nreason=hwid_mismatch');
   }
 
   const expiresAtMs = doc.expiresAt ? doc.expiresAt.getTime() : 0; // 0 = vĩnh viễn
