@@ -12,7 +12,10 @@ const keySchema = new mongoose.Schema({
   },
   durationValue: { type: Number, default: null }, // null khi permanent
   expiresAt: { type: Date, default: null }, // null = vĩnh viễn — TTL index bên dưới tự bỏ qua null
-  hwid: { type: String, default: null, index: true },
+  // Số lượng máy (HWID) tối đa mà key này được phép bind cùng lúc.
+  hwidLimit: { type: Number, default: 1 },
+  // Danh sách HWID đã bind vào key, tối đa hwidLimit phần tử.
+  hwids: { type: [String], default: [], index: true },
   status: { type: String, enum: ['active', 'revoked'], default: 'active' },
   source: { type: String, enum: ['checkpoint', 'panel'], required: true },
   createdAt: { type: Date, default: Date.now },
