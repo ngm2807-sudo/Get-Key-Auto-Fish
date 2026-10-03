@@ -15,6 +15,14 @@ function hashIp(ip) {
   return crypto.createHash('sha256').update(ip).digest('hex');
 }
 
+// Vercel/Node đôi khi trả IPv4 dưới dạng IPv4-mapped IPv6 ("::ffff:1.2.3.4")
+// tùy tầng proxy, trong khi work.ink luôn trả IPv4 thuần ("1.2.3.4"). Chuẩn
+// hoá về 1 dạng trước khi lưu/so sánh để tránh lệch IP giả (false mismatch).
+function normalizeIp(ip) {
+  if (!ip) return ip;
+  return ip.startsWith('::ffff:') ? ip.slice(7) : ip;
+}
+
 function buildClaimPageHtml({ title, message, success, keyValue }) {
   const keyBlock = keyValue ? `<div class="key">${keyValue}</div>` : '';
   return `<!DOCTYPE html>
@@ -174,7 +182,7 @@ app.get('/claim/:token', async (req, res) => {
     // ghi nhận IP của user rồi đưa họ sang link tĩnh đó; việc xác thực +
     // khớp đúng session diễn ra ở route /claim/workink-callback bên dưới.
     if (session.provider === 'workink') {
-      session.clientIp = req.ip;
+      session.clientIp = normalizeIp(req.ip);
       await session.save();
       return res.redirect(302, getStaticWorkInkLink());
     }
@@ -251,19 +259,29 @@ app.get('/claim/workink-callback', async (req, res) => {
 
   // Khớp session theo byIp — so cả IP thô lẫn SHA-256 vì "Hash User IP"
   // trong dashboard work.ink có thể bật hoặc tắt.
+  //
+  // QUAN TRỌNG: phải quét TOÀN BỘ session workink đang pending rồi tìm đúng
+  // cái khớp IP — KHÔNG được chỉ lấy 1 session mới nhất rồi so IP với nó.
+  // Nếu có từ 2 người trở lên đang vượt checkpoint work.ink cùng lúc, lấy
+  // nhầm session "mới nhất" (của người khác) sẽ luôn so IP sai và báo
+  // "không khớp" dù session thật của user vẫn còn nguyên, chưa hết hạn.
   const byIp = verify.info?.byIp;
-  const session = await Session.findOne({
-    provider: 'workink',
-    status: 'pending',
-    clientIp: { $exists: true, $ne: null },
-  }).sort({ createdAt: -1 });
+  let session = null;
 
-  const matched =
-    session &&
-    byIp &&
-    (session.clientIp === byIp || hashIp(session.clientIp) === byIp);
+  if (byIp) {
+    const candidates = await Session.find({
+      provider: 'workink',
+      status: 'pending',
+      clientIp: { $exists: true, $ne: null },
+    }).sort({ createdAt: -1 });
 
-  if (!matched) {
+    session = candidates.find((s) => {
+      const ip = normalizeIp(s.clientIp);
+      return ip === byIp || hashIp(ip) === byIp;
+    });
+  }
+
+  if (!session) {
     return res.status(409).send(
       buildClaimPageHtml({
         title: 'Không khớp được phiên',
@@ -321,12 +339,10 @@ app.get('/webhook/lootlabs', async (req, res) => {
  * kiểu này chỉ cần StrSplit 2 lần, không cần cài thêm gì ở phía client.
  *
  * reason có thể là: ok | missing_params | not_found | revoked | expired |
- *                    hwid_mismatch | hwid_blacklisted | hwid_limit_reached
+ *                    hwid_mismatch | hwid_blacklisted
  *
- * Mỗi key có hwidLimit máy được phép dùng cùng lúc (mặc định 1). Khi 1 HWID
- * mới gửi lên và key chưa đủ slot (hwids.length < hwidLimit), server tự
- * BIND hwid đó vào key luôn. Khi đã đủ slot và hwid gửi lên không nằm
- * trong danh sách đã bind → hwid_limit_reached.
+ * Lần đầu 1 key được verify (hwid hiện đang null), server tự BIND hwid gửi
+ * lên vào key đó luôn — đây chính là lúc "khoá" key vào máy.
  */
 app.get('/api/validate', async (req, res) => {
   res.type('text/plain');
@@ -352,14 +368,12 @@ app.get('/api/validate', async (req, res) => {
     return res.send('valid=false\nreason=expired');
   }
 
-  if (!doc.hwids.includes(hwid)) {
-    const limit = doc.hwidLimit || 1;
-    if (doc.hwids.length >= limit) {
-      return res.send('valid=false\nreason=hwid_limit_reached');
-    }
-    // Còn slot trống — bind luôn hwid này vào key.
-    doc.hwids.push(hwid);
+  if (!doc.hwid) {
+    // Lần verify đầu tiên — bind luôn hwid này vào key.
+    doc.hwid = hwid;
     await doc.save();
+  } else if (doc.hwid !== hwid) {
+    return res.send('valid=false\nreason=hwid_mismatch');
   }
 
   const expiresAtMs = doc.expiresAt ? doc.expiresAt.getTime() : 0; // 0 = vĩnh viễn
