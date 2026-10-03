@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const Session = require('../models/Session');
 const Key = require('../models/Key');
 const Settings = require('../models/Settings');
+const Blacklist = require('../models/Blacklist');
 const { generateLicenseKey, computeExpiry } = require('../utils/keygen');
 const { getStaticWorkInkLink, verifyWorkInkToken } = require('../services/workink');
 const { sendDM, sendChannelMessage } = require('../services/discordRest');
@@ -308,6 +309,57 @@ app.get('/webhook/lootlabs', async (req, res) => {
     console.error('[GET /webhook/lootlabs]', err);
     return res.status(500).send('error');
   }
+});
+
+/**
+ * Endpoint cho client (script AHK) gọi lên để kiểm tra key + bind/khớp HWID.
+ *
+ * GET /api/validate?key=XXXXX-...&hwid=...
+ *
+ * Trả về text thuần dạng "field=value", mỗi dòng 1 field — KHÔNG trả JSON,
+ * vì AutoHotkey v2 không có sẵn thư viện parse JSON, trong khi parse text
+ * kiểu này chỉ cần StrSplit 2 lần, không cần cài thêm gì ở phía client.
+ *
+ * reason có thể là: ok | missing_params | not_found | revoked | expired |
+ *                    hwid_mismatch | hwid_blacklisted
+ *
+ * Lần đầu 1 key được verify (hwid hiện đang null), server tự BIND hwid gửi
+ * lên vào key đó luôn — đây chính là lúc "khoá" key vào máy.
+ */
+app.get('/api/validate', async (req, res) => {
+  res.type('text/plain');
+  const { key, hwid } = req.query;
+
+  if (!key || !hwid) {
+    return res.send('valid=false\nreason=missing_params');
+  }
+
+  const blacklisted = await Blacklist.findOne({ hwid });
+  if (blacklisted) {
+    return res.send('valid=false\nreason=hwid_blacklisted');
+  }
+
+  const doc = await Key.findOne({ key });
+  if (!doc) {
+    return res.send('valid=false\nreason=not_found');
+  }
+  if (doc.status === 'revoked') {
+    return res.send('valid=false\nreason=revoked');
+  }
+  if (doc.expiresAt && doc.expiresAt.getTime() < Date.now()) {
+    return res.send('valid=false\nreason=expired');
+  }
+
+  if (!doc.hwid) {
+    // Lần verify đầu tiên — bind luôn hwid này vào key.
+    doc.hwid = hwid;
+    await doc.save();
+  } else if (doc.hwid !== hwid) {
+    return res.send('valid=false\nreason=hwid_mismatch');
+  }
+
+  const expiresAtMs = doc.expiresAt ? doc.expiresAt.getTime() : 0; // 0 = vĩnh viễn
+  return res.send(`valid=true\nreason=ok\nexpiresAt=${expiresAtMs}`);
 });
 
 app.get('/', (req, res) => res.send('Key bot web service is running.'));
