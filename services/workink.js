@@ -1,11 +1,10 @@
 const axios = require('axios');
 
 /**
- * Work.ink Key System KHÔNG có API tạo link động — link phải tạo thủ công
- * trong dashboard (https://dashboard.work.ink/) với đích đến cố định dạng
- * https://yourdomain.com/claim/workink-callback?wiToken={TOKEN}
- * (xem Key Link Creation trong docs chính thức). Vì vậy không có hàm
- * createWorkInkLink ở đây nữa — chỉ cần đọc link tĩnh từ .env.
+ * Link work.ink TĨNH (tạo thủ công trong dashboard, đích đến mặc định dạng
+ * https://yourdomain.com/claim/workink-callback?wiToken={TOKEN}). Dùng làm
+ * nền cho Link Override bên dưới — override chỉ GẮN THÊM ?sr=... vào link
+ * này, không thay thế nó.
  */
 function getStaticWorkInkLink() {
   const link = process.env.WORKINK_BASE_LINK;
@@ -26,4 +25,48 @@ async function verifyWorkInkToken(wiToken) {
   return data; // { valid, deleted, info: { byIp, linkId, ... } }
 }
 
-module.exports = { getStaticWorkInkLink, verifyWorkInkToken };
+/**
+ * Link Override API — cho phép override đích đến của 1 LẦN click cụ thể
+ * trên link work.ink tĩnh, để nhét thẳng session token của mình vào URL
+ * callback. Nhờ vậy route /claim/workink-callback nhận diện đúng phiên
+ * 100% chắc chắn, KHÔNG cần đoán qua byIp nữa (byIp của work.ink luôn là
+ * IPv4, trong khi IP mà server mình thấy có thể là IPv6 tùy nhà mạng —
+ * 2 giá trị này có thể không bao giờ khớp dù đúng 1 người, nên so IP vốn
+ * không đáng tin cậy).
+ *
+ * Docs: https://blog.work.ink/how-to-override-link-destinations-on-the-fly/
+ *
+ * GET https://work.ink/_api/v2/override?destination=<url cần redirect tới>
+ * -> { "sr": "<chuỗi mã hoá>" }
+ * Gắn chuỗi đó vào link work.ink tĩnh dạng ?sr=... thì click đó sẽ redirect
+ * tới đúng `destination` thay vì đích đến mặc định cấu hình trong dashboard.
+ *
+ * Nếu endpoint này yêu cầu xác thực tài khoản (một số action trong dashboard
+ * work.ink cần X-Api-Key, lấy tại Developer > API Keys), set WORKINK_API_KEY
+ * trong .env — không set thì request vẫn gửi, chỉ là không kèm header đó.
+ */
+async function createWorkInkOverride(destinationUrl) {
+  const headers = process.env.WORKINK_API_KEY
+    ? { 'X-Api-Key': process.env.WORKINK_API_KEY }
+    : undefined;
+  const { data } = await axios.get('https://work.ink/_api/v2/override', {
+    params: { destination: destinationUrl },
+    headers,
+  });
+  if (!data?.sr) throw new Error('work.ink override API không trả về field "sr"');
+  return data.sr;
+}
+
+/** Gắn chuỗi override (sr) vào link work.ink tĩnh. */
+function buildOverriddenWorkInkLink(sr) {
+  const base = getStaticWorkInkLink();
+  const sep = base.includes('?') ? '&' : '?';
+  return `${base}${sep}sr=${encodeURIComponent(sr)}`;
+}
+
+module.exports = {
+  getStaticWorkInkLink,
+  verifyWorkInkToken,
+  createWorkInkOverride,
+  buildOverriddenWorkInkLink,
+};
