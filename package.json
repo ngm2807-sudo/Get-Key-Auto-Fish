@@ -1,0 +1,22 @@
+{
+  "name": "discord-key-bot",
+  "version": "1.0.0",
+  "description": "Discord bot: /get key qua checkpoint Lootslab/Workink, luu MongoDB, panel quan ly key + HWID cho owner.",
+  "main": "index.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "start:web": "node web-entry.js",
+    "deploy": "node deploy-commands.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "mongoose": "^8.9.5"
+  }
+}
